@@ -16,7 +16,7 @@ const (
 )
 
 type CreateJobRequest struct {
-	RepoURL     string   `json:"repo_url" binding:"required,url"`
+	RepoURL     string   `json:"repo_url"`
 	Branch      string   `json:"branch" binding:"required"`
 	ScanType    []string `json:"scan_type" binding:"required,min=1,dive,required,oneof=sast sca secret dast"`
 	BlockOnHigh bool     `json:"block_on_high"`

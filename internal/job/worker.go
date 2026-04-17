@@ -155,6 +155,12 @@ func (s *Service) saveResults(ctx context.Context, jobID int64, findings []commo
 		return nil
 	}
 
+	records := buildScanResults(jobID, findings)
+
+	return s.db.WithContext(ctx).Create(&records).Error
+}
+
+func buildScanResults(jobID int64, findings []common.Finding) []store.ScanResult {
 	records := make([]store.ScanResult, 0, len(findings))
 	for _, finding := range findings {
 		records = append(records, store.ScanResult{
@@ -172,7 +178,7 @@ func (s *Service) saveResults(ctx context.Context, jobID int64, findings []commo
 		})
 	}
 
-	return s.db.WithContext(ctx).Create(&records).Error
+	return records
 }
 
 func shouldRunSAST(job Job) bool {
