@@ -29,8 +29,7 @@ func main() {
 		panic(err)
 	}
 
-	jobStore := store.NewJobStore()
-	jobService := job.NewService(jobStore, logger)
+	jobService := job.NewService(store.GetDB(), logger)
 	jobHandler := job.NewHandler(jobService)
 
 	router := newRouter(logger, jobHandler)

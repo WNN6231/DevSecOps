@@ -7,36 +7,66 @@ import (
 	"time"
 
 	"devsecops-platform/internal/store"
+	"gorm.io/gorm"
 )
 
 var ErrJobNotFound = errors.New("job not found")
+var ErrInvalidJobStatus = errors.New("invalid job status")
 
 type Service struct {
-	store  *store.JobStore
+	db     *gorm.DB
 	logger *slog.Logger
 }
 
-func NewService(store *store.JobStore, logger *slog.Logger) *Service {
+func NewService(db *gorm.DB, logger *slog.Logger) *Service {
 	return &Service{
-		store:  store,
+		db:     db,
 		logger: logger,
 	}
 }
 
+func (s *Service) CreateJob(repoURL, branch string) (Job, error) {
+	return s.createJob(context.Background(), repoURL, branch, nil, false)
+}
+
+func (s *Service) GetJob(id int64) (Job, error) {
+	return s.getJob(context.Background(), id)
+}
+
+func (s *Service) UpdateJobStatus(id int64, status string) (Job, error) {
+	return s.updateJobStatus(context.Background(), id, status)
+}
+
 func (s *Service) Create(ctx context.Context, req CreateJobRequest) (Job, error) {
-	record, err := s.store.Create(store.JobRecord{
-		RepoURL:     req.RepoURL,
-		Branch:      req.Branch,
-		ScanType:    append([]string(nil), req.ScanType...),
-		BlockOnHigh: req.BlockOnHigh,
-		Status:      StatusPending,
-		CreatedAt:   time.Now().UTC(),
-	})
+	return s.createJob(ctx, req.RepoURL, req.Branch, req.ScanType, req.BlockOnHigh)
+}
+
+func (s *Service) GetByID(ctx context.Context, id int64) (Job, error) {
+	return s.getJob(ctx, id)
+}
+
+func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanType []string, blockOnHigh bool) (Job, error) {
+	encodedScanType, err := encodeScanType(scanType)
 	if err != nil {
 		return Job{}, err
 	}
 
-	job := fromRecord(record)
+	record := store.ScanJob{
+		RepoURL:     repoURL,
+		Branch:      branch,
+		ScanType:    encodedScanType,
+		BlockOnHigh: blockOnHigh,
+		Status:      StatusPending,
+	}
+
+	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
+		return Job{}, err
+	}
+
+	job, err := fromRecord(record)
+	if err != nil {
+		return Job{}, err
+	}
 
 	s.logger.InfoContext(ctx, "job created",
 		slog.Int64("job_id", job.ID),
@@ -47,13 +77,20 @@ func (s *Service) Create(ctx context.Context, req CreateJobRequest) (Job, error)
 	return job, nil
 }
 
-func (s *Service) GetByID(ctx context.Context, id int64) (Job, error) {
-	record, ok := s.store.GetByID(id)
-	if !ok {
-		return Job{}, ErrJobNotFound
+func (s *Service) getJob(ctx context.Context, id int64) (Job, error) {
+	var record store.ScanJob
+	if err := s.db.WithContext(ctx).First(&record, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Job{}, ErrJobNotFound
+		}
+
+		return Job{}, err
 	}
 
-	job := fromRecord(record)
+	job, err := fromRecord(record)
+	if err != nil {
+		return Job{}, err
+	}
 
 	s.logger.InfoContext(ctx, "job loaded",
 		slog.Int64("job_id", job.ID),
@@ -61,4 +98,82 @@ func (s *Service) GetByID(ctx context.Context, id int64) (Job, error) {
 	)
 
 	return job, nil
+}
+
+func (s *Service) updateJobStatus(ctx context.Context, id int64, status string) (Job, error) {
+	if !isValidStatus(status) {
+		return Job{}, ErrInvalidJobStatus
+	}
+
+	var record store.ScanJob
+	if err := s.db.WithContext(ctx).First(&record, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Job{}, ErrJobNotFound
+		}
+
+		return Job{}, err
+	}
+
+	applyStatusTimestamps(&record, status)
+
+	if err := s.db.WithContext(ctx).Model(&record).Updates(map[string]interface{}{
+		"status":      record.Status,
+		"started_at":  record.StartedAt,
+		"finished_at": record.FinishedAt,
+	}).Error; err != nil {
+		return Job{}, err
+	}
+
+	job, err := fromRecord(record)
+	if err != nil {
+		return Job{}, err
+	}
+
+	s.logger.InfoContext(ctx, "job status updated",
+		slog.Int64("job_id", job.ID),
+		slog.String("status", job.Status),
+	)
+
+	return job, nil
+}
+
+func isValidStatus(status string) bool {
+	switch status {
+	case StatusPending, StatusRunning, StatusSuccess, StatusFailed, StatusBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+func applyStatusTimestamps(record *store.ScanJob, status string) {
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = timeNowUTC()
+	}
+
+	record.Status = status
+
+	switch status {
+	case StatusPending:
+		record.StartedAt = nil
+		record.FinishedAt = nil
+	case StatusRunning:
+		if record.StartedAt == nil {
+			startedAt := timeNowUTC()
+			record.StartedAt = &startedAt
+		}
+		record.FinishedAt = nil
+	case StatusSuccess, StatusFailed, StatusBlocked:
+		if record.StartedAt == nil {
+			startedAt := now
+			record.StartedAt = &startedAt
+		}
+		finishedAt := timeNowUTC()
+		record.FinishedAt = &finishedAt
+	}
+}
+
+func timeNowUTC() time.Time {
+	return time.Now().UTC()
 }
