@@ -119,11 +119,12 @@ if err != nil {
 
 ---
 
-## 6. Storage Rules (Phase 1)
+## 6. Minimal Persistent Layer (Phase 1)
 
-* Use in-memory storage ONLY
-* No database
-* No Redis
+- Use MySQL (Docker)
+- Use GORM
+- Only implement scan_jobs + scan_results
+- No Redis, no queue, no scanners yet
 
 Example:
 

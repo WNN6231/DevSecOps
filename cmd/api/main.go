@@ -24,6 +24,11 @@ func main() {
 
 	gin.SetMode(cfg.GinMode)
 
+	if err := store.InitDB(cfg.Database); err != nil {
+		logger.Error("database initialization failed", slog.String("error", err.Error()))
+		panic(err)
+	}
+
 	jobStore := store.NewJobStore()
 	jobService := job.NewService(jobStore, logger)
 	jobHandler := job.NewHandler(jobService)
