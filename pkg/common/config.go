@@ -22,14 +22,15 @@ type DatabaseConfig struct {
 }
 
 type Config struct {
-	AppEnv          string
-	GinMode         string
-	HTTPAddr        string
-	LogLevel        string
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	ShutdownTimeout time.Duration
-	Database        DatabaseConfig
+	AppEnv             string
+	GinMode            string
+	HTTPAddr           string
+	LogLevel           string
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	ShutdownTimeout    time.Duration
+	WorkerPollInterval time.Duration
+	Database           DatabaseConfig
 }
 
 func LoadConfig() (Config, error) {
@@ -46,6 +47,11 @@ func LoadConfig() (Config, error) {
 	shutdownTimeout, err := getEnvInt("HTTP_SHUTDOWN_TIMEOUT_SEC", 10)
 	if err != nil {
 		return Config{}, fmt.Errorf("parse HTTP_SHUTDOWN_TIMEOUT_SEC: %w", err)
+	}
+
+	workerPollInterval, err := getEnvInt("WORKER_POLL_INTERVAL_SEC", 5)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse WORKER_POLL_INTERVAL_SEC: %w", err)
 	}
 
 	dbPort, err := getEnvInt("DB_PORT", 3306)
@@ -69,13 +75,14 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
-		AppEnv:          getEnv("APP_ENV", "development"),
-		GinMode:         getEnv("GIN_MODE", "release"),
-		HTTPAddr:        getEnv("HTTP_ADDR", ":8080"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
-		ReadTimeout:     time.Duration(readTimeout) * time.Second,
-		WriteTimeout:    time.Duration(writeTimeout) * time.Second,
-		ShutdownTimeout: time.Duration(shutdownTimeout) * time.Second,
+		AppEnv:             getEnv("APP_ENV", "development"),
+		GinMode:            getEnv("GIN_MODE", "release"),
+		HTTPAddr:           getEnv("HTTP_ADDR", ":8080"),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		ReadTimeout:        time.Duration(readTimeout) * time.Second,
+		WriteTimeout:       time.Duration(writeTimeout) * time.Second,
+		ShutdownTimeout:    time.Duration(shutdownTimeout) * time.Second,
+		WorkerPollInterval: time.Duration(workerPollInterval) * time.Second,
 		Database: DatabaseConfig{
 			Host:               getEnv("DB_HOST", "127.0.0.1"),
 			Port:               dbPort,
