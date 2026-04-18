@@ -76,6 +76,11 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		return true, w.failJob(ctx, job.ID, err)
 	}
 
+	reportPath, err := report.WriteMarkdownReport(job.ID, aggregated)
+	if err != nil {
+		return true, w.failJob(ctx, job.ID, err)
+	}
+
 	finalStatus := determineFinalStatus(job, aggregated.Findings)
 	if _, err := w.service.updateJobStatus(ctx, job.ID, finalStatus); err != nil {
 		return true, err
@@ -87,6 +92,7 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		slog.Int("result_count", len(aggregated.Findings)),
 		slog.Any("severity_counts", aggregated.Counts),
 		slog.Int("risk_score", aggregated.TotalRiskScore),
+		slog.String("report_path", reportPath),
 	)
 
 	return true, nil
