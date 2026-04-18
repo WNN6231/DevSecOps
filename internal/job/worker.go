@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"devsecops-platform/internal/report"
 	"devsecops-platform/internal/scanner/sast"
 	"devsecops-platform/internal/store"
 	"devsecops-platform/pkg/common"
@@ -69,11 +70,13 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		return true, w.failJob(ctx, job.ID, err)
 	}
 
-	if err := w.service.saveResults(ctx, job.ID, findings); err != nil {
+	aggregated := report.Aggregate(findings)
+
+	if err := w.service.saveResults(ctx, job.ID, aggregated.Findings); err != nil {
 		return true, w.failJob(ctx, job.ID, err)
 	}
 
-	finalStatus := determineFinalStatus(job, findings)
+	finalStatus := determineFinalStatus(job, aggregated.Findings)
 	if _, err := w.service.updateJobStatus(ctx, job.ID, finalStatus); err != nil {
 		return true, err
 	}
@@ -81,7 +84,9 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	w.logger.InfoContext(ctx, "job processed",
 		slog.Int64("job_id", job.ID),
 		slog.String("status", finalStatus),
-		slog.Int("result_count", len(findings)),
+		slog.Int("result_count", len(aggregated.Findings)),
+		slog.Any("severity_counts", aggregated.Counts),
+		slog.Int("risk_score", aggregated.TotalRiskScore),
 	)
 
 	return true, nil
