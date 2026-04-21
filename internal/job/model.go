@@ -2,6 +2,7 @@ package job
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"devsecops-platform/internal/store"
@@ -46,6 +47,44 @@ type JobResponse struct {
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 }
 
+type ListResultsRequest struct {
+	Page     int `form:"page"`
+	PageSize int `form:"page_size"`
+}
+
+type ResultFindingResponse struct {
+	Scanner        string `json:"scanner"`
+	Severity       string `json:"severity"`
+	RuleID         string `json:"rule_id"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	FilePath       string `json:"file_path"`
+	LineNumber     int    `json:"line_number"`
+	Evidence       string `json:"evidence"`
+	Recommendation string `json:"recommendation"`
+	Hash           string `json:"hash"`
+}
+
+type ResultsPagination struct {
+	Page     int   `json:"page"`
+	PageSize int   `json:"page_size"`
+	Total    int64 `json:"total"`
+}
+
+type ResultsResponse struct {
+	JobID      int64                   `json:"job_id"`
+	Findings   []ResultFindingResponse `json:"findings"`
+	Pagination ResultsPagination       `json:"pagination"`
+}
+
+const (
+	defaultResultsPage     = 1
+	defaultResultsPageSize = 20
+	maxResultsPageSize     = 100
+)
+
+var ErrInvalidPagination = errors.New("invalid pagination")
+
 func fromRecord(record store.ScanJob) (Job, error) {
 	scanType, err := decodeScanType(record.ScanType)
 	if err != nil {
@@ -76,6 +115,51 @@ func (j Job) toResponse() JobResponse {
 		CreatedAt:   j.CreatedAt,
 		StartedAt:   j.StartedAt,
 		FinishedAt:  j.FinishedAt,
+	}
+}
+
+func normalizeListResultsRequest(req ListResultsRequest) (ListResultsRequest, error) {
+	if req.Page == 0 {
+		req.Page = defaultResultsPage
+	}
+	if req.PageSize == 0 {
+		req.PageSize = defaultResultsPageSize
+	}
+	if req.Page < 1 || req.PageSize < 1 {
+		return ListResultsRequest{}, ErrInvalidPagination
+	}
+	if req.PageSize > maxResultsPageSize {
+		req.PageSize = maxResultsPageSize
+	}
+
+	return req, nil
+}
+
+func toResultsResponse(jobID int64, results []store.ScanResult, page, pageSize int, total int64) ResultsResponse {
+	findings := make([]ResultFindingResponse, 0, len(results))
+	for _, result := range results {
+		findings = append(findings, ResultFindingResponse{
+			Scanner:        result.ScannerName,
+			Severity:       result.Severity,
+			RuleID:         result.RuleID,
+			Title:          result.Title,
+			Description:    result.Description,
+			FilePath:       result.FilePath,
+			LineNumber:     result.LineNumber,
+			Evidence:       result.Evidence,
+			Recommendation: result.Recommendation,
+			Hash:           result.Hash,
+		})
+	}
+
+	return ResultsResponse{
+		JobID:    jobID,
+		Findings: findings,
+		Pagination: ResultsPagination{
+			Page:     page,
+			PageSize: pageSize,
+			Total:    total,
+		},
 	}
 }
 

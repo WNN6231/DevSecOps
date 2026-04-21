@@ -45,6 +45,26 @@ func (s *Service) GetByID(ctx context.Context, id int64) (Job, error) {
 	return s.getJob(ctx, id)
 }
 
+func (s *Service) GetResults(ctx context.Context, id int64, req ListResultsRequest) (ResultsResponse, error) {
+	normalizedReq, err := normalizeListResultsRequest(req)
+	if err != nil {
+		return ResultsResponse{}, err
+	}
+
+	job, err := s.getJob(ctx, id)
+	if err != nil {
+		return ResultsResponse{}, err
+	}
+
+	offset := (normalizedReq.Page - 1) * normalizedReq.PageSize
+	results, total, err := store.ListScanResults(ctx, s.db, job.ID, offset, normalizedReq.PageSize)
+	if err != nil {
+		return ResultsResponse{}, err
+	}
+
+	return toResultsResponse(job.ID, results, normalizedReq.Page, normalizedReq.PageSize, total), nil
+}
+
 func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanType []string, blockOnHigh bool) (Job, error) {
 	encodedScanType, err := encodeScanType(scanType)
 	if err != nil {

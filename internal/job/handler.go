@@ -21,6 +21,7 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/jobs", h.createJob)
 	router.GET("/jobs/:id", h.getJob)
+	router.GET("/jobs/:id/results", h.getResults)
 }
 
 func (h *Handler) createJob(c *gin.Context) {
@@ -58,4 +59,33 @@ func (h *Handler) getJob(c *gin.Context) {
 	}
 
 	common.WriteOK(c, job.toResponse())
+}
+
+func (h *Handler) getResults(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		common.WriteError(c, http.StatusBadRequest, "invalid job id")
+		return
+	}
+
+	var req ListResultsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		common.WriteError(c, http.StatusBadRequest, "invalid pagination")
+		return
+	}
+
+	results, err := h.service.GetResults(c.Request.Context(), id, req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrJobNotFound):
+			common.WriteError(c, http.StatusNotFound, "job not found")
+		case errors.Is(err, ErrInvalidPagination):
+			common.WriteError(c, http.StatusBadRequest, "invalid pagination")
+		default:
+			common.WriteError(c, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+
+	common.WriteOK(c, results)
 }
