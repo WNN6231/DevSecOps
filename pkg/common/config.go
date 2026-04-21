@@ -1,8 +1,11 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -26,6 +29,7 @@ type Config struct {
 	GinMode            string
 	HTTPAddr           string
 	LogLevel           string
+	ReportDir          string
 	ReadTimeout        time.Duration
 	WriteTimeout       time.Duration
 	ShutdownTimeout    time.Duration
@@ -74,11 +78,17 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("parse DB_CONN_MAX_LIFETIME_SEC: %w", err)
 	}
 
+	reportDir, err := resolveReportDir()
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve REPORT_DIR: %w", err)
+	}
+
 	return Config{
 		AppEnv:             getEnv("APP_ENV", "development"),
 		GinMode:            getEnv("GIN_MODE", "release"),
 		HTTPAddr:           getEnv("HTTP_ADDR", ":8080"),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		ReportDir:          reportDir,
 		ReadTimeout:        time.Duration(readTimeout) * time.Second,
 		WriteTimeout:       time.Duration(writeTimeout) * time.Second,
 		ShutdownTimeout:    time.Duration(shutdownTimeout) * time.Second,
@@ -134,4 +144,31 @@ func getEnvBool(key string, fallback bool) bool {
 	}
 
 	return parsed
+}
+
+func resolveReportDir() (string, error) {
+	projectRoot, err := projectRootDir()
+	if err != nil {
+		return "", err
+	}
+
+	reportDir := os.Getenv("REPORT_DIR")
+	if reportDir == "" {
+		return filepath.Join(projectRoot, "reports"), nil
+	}
+
+	if filepath.IsAbs(reportDir) {
+		return filepath.Clean(reportDir), nil
+	}
+
+	return filepath.Clean(filepath.Join(projectRoot, reportDir)), nil
+}
+
+func projectRootDir() (string, error) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("resolve source location")
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..")), nil
 }

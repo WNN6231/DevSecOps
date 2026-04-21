@@ -6,22 +6,26 @@ import (
 	"log/slog"
 	"time"
 
+	"devsecops-platform/internal/report"
 	"devsecops-platform/internal/store"
 	"gorm.io/gorm"
 )
 
 var ErrJobNotFound = errors.New("job not found")
 var ErrInvalidJobStatus = errors.New("invalid job status")
+var ErrReportNotFound = errors.New("report not found")
 
 type Service struct {
-	db     *gorm.DB
-	logger *slog.Logger
+	reportDir string
+	db        *gorm.DB
+	logger    *slog.Logger
 }
 
-func NewService(db *gorm.DB, logger *slog.Logger) *Service {
+func NewService(db *gorm.DB, logger *slog.Logger, reportDir string) *Service {
 	return &Service{
-		db:     db,
-		logger: logger,
+		reportDir: reportDir,
+		db:        db,
+		logger:    logger,
 	}
 }
 
@@ -63,6 +67,27 @@ func (s *Service) GetResults(ctx context.Context, id int64, req ListResultsReque
 	}
 
 	return toResultsResponse(job.ID, results, normalizedReq.Page, normalizedReq.PageSize, total), nil
+}
+
+func (s *Service) GetReport(ctx context.Context, id int64) (ReportResponse, error) {
+	job, err := s.getJob(ctx, id)
+	if err != nil {
+		return ReportResponse{}, err
+	}
+
+	content, err := report.ReadMarkdownReport(s.reportDir, job.ID)
+	if err != nil {
+		if errors.Is(err, report.ErrReportNotFound) {
+			return ReportResponse{}, ErrReportNotFound
+		}
+
+		return ReportResponse{}, err
+	}
+
+	return ReportResponse{
+		JobID:   job.ID,
+		Content: content,
+	}, nil
 }
 
 func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanType []string, blockOnHigh bool) (Job, error) {

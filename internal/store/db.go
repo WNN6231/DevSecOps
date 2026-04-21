@@ -30,7 +30,7 @@ func InitDB(cfg common.DatabaseConfig) error {
 		return fmt.Errorf("ping mysql: %w", err)
 	}
 
-	if err := database.AutoMigrate(&ScanJob{}, &ScanResult{}); err != nil {
+	if err := database.AutoMigrate(&ScanJob{}, &ScanResult{}, &ScanReport{}); err != nil {
 		return fmt.Errorf("auto migrate tables: %w", err)
 	}
 

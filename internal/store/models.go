@@ -37,3 +37,19 @@ type ScanResult struct {
 func (ScanResult) TableName() string {
 	return "scan_results"
 }
+
+type ScanReport struct {
+	ID          uint64    `gorm:"column:id;primaryKey;autoIncrement"`
+	JobID       uint64    `gorm:"column:job_id;not null;uniqueIndex"`
+	ReportPath  string    `gorm:"column:report_path;type:varchar(1024);not null"`
+	SummaryJSON string    `gorm:"column:summary_json;type:text;not null"`
+	HighCount   int       `gorm:"column:high_count;not null"`
+	MediumCount int       `gorm:"column:medium_count;not null"`
+	LowCount    int       `gorm:"column:low_count;not null"`
+	RiskScore   int       `gorm:"column:risk_score;not null"`
+	CreatedAt   time.Time `gorm:"column:created_at;not null;autoCreateTime"`
+}
+
+func (ScanReport) TableName() string {
+	return "scan_reports"
+}

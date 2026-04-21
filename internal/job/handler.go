@@ -22,6 +22,7 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/jobs", h.createJob)
 	router.GET("/jobs/:id", h.getJob)
 	router.GET("/jobs/:id/results", h.getResults)
+	router.GET("/jobs/:id/report", h.getReport)
 }
 
 func (h *Handler) createJob(c *gin.Context) {
@@ -88,4 +89,27 @@ func (h *Handler) getResults(c *gin.Context) {
 	}
 
 	common.WriteOK(c, results)
+}
+
+func (h *Handler) getReport(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		common.WriteError(c, http.StatusBadRequest, "invalid job id")
+		return
+	}
+
+	report, err := h.service.GetReport(c.Request.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrJobNotFound):
+			common.WriteError(c, http.StatusNotFound, "job not found")
+		case errors.Is(err, ErrReportNotFound):
+			common.WriteError(c, http.StatusNotFound, "report not found")
+		default:
+			common.WriteError(c, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+
+	common.WriteOK(c, report)
 }

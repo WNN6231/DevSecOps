@@ -1,6 +1,7 @@
 package report
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,16 +10,20 @@ import (
 	"devsecops-platform/pkg/common"
 )
 
-const reportsDir = "reports"
-
 var severityOrder = []string{"critical", "high", "medium", "low", "info"}
+var ErrReportNotFound = errors.New("report not found")
+var ErrInvalidReportDir = errors.New("report dir must be absolute")
 
-func WriteMarkdownReport(jobID int64, result AggregatedResult) (string, error) {
-	if err := os.MkdirAll(reportsDir, 0o755); err != nil {
+func WriteMarkdownReport(reportDir string, jobID int64, result AggregatedResult) (string, error) {
+	reportPath, err := markdownReportPath(reportDir, jobID)
+	if err != nil {
 		return "", err
 	}
 
-	reportPath := filepath.Join(reportsDir, fmt.Sprintf("%d.md", jobID))
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		return "", err
+	}
+
 	content := buildMarkdownReport(jobID, result)
 
 	if err := os.WriteFile(reportPath, []byte(content), 0o644); err != nil {
@@ -26,6 +31,32 @@ func WriteMarkdownReport(jobID int64, result AggregatedResult) (string, error) {
 	}
 
 	return reportPath, nil
+}
+
+func ReadMarkdownReport(reportDir string, jobID int64) (string, error) {
+	reportPath, err := markdownReportPath(reportDir, jobID)
+	if err != nil {
+		return "", err
+	}
+
+	content, err := os.ReadFile(reportPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", ErrReportNotFound
+		}
+
+		return "", err
+	}
+
+	return string(content), nil
+}
+
+func markdownReportPath(reportDir string, jobID int64) (string, error) {
+	if !filepath.IsAbs(reportDir) {
+		return "", ErrInvalidReportDir
+	}
+
+	return filepath.Join(filepath.Clean(reportDir), fmt.Sprintf("%d.md", jobID)), nil
 }
 
 func buildMarkdownReport(jobID int64, result AggregatedResult) string {

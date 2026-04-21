@@ -77,6 +77,11 @@ type ResultsResponse struct {
 	Pagination ResultsPagination       `json:"pagination"`
 }
 
+type ReportResponse struct {
+	JobID   int64  `json:"job_id"`
+	Content string `json:"content"`
+}
+
 const (
 	defaultResultsPage     = 1
 	defaultResultsPageSize = 20

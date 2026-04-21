@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -76,8 +77,12 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		return true, w.failJob(ctx, job.ID, err)
 	}
 
-	reportPath, err := report.WriteMarkdownReport(job.ID, aggregated)
+	reportPath, err := report.WriteMarkdownReport(w.service.reportDir, job.ID, aggregated)
 	if err != nil {
+		return true, w.failJob(ctx, job.ID, err)
+	}
+
+	if err := w.service.saveReport(ctx, job.ID, reportPath, aggregated); err != nil {
 		return true, w.failJob(ctx, job.ID, err)
 	}
 
@@ -171,6 +176,15 @@ func (s *Service) saveResults(ctx context.Context, jobID int64, findings []commo
 	return s.db.WithContext(ctx).Create(&records).Error
 }
 
+func (s *Service) saveReport(ctx context.Context, jobID int64, reportPath string, aggregated report.AggregatedResult) error {
+	record, err := buildScanReport(jobID, reportPath, aggregated)
+	if err != nil {
+		return err
+	}
+
+	return s.db.WithContext(ctx).Create(&record).Error
+}
+
 func buildScanResults(jobID int64, findings []common.Finding) []store.ScanResult {
 	records := make([]store.ScanResult, 0, len(findings))
 	for _, finding := range findings {
@@ -190,6 +204,23 @@ func buildScanResults(jobID int64, findings []common.Finding) []store.ScanResult
 	}
 
 	return records
+}
+
+func buildScanReport(jobID int64, reportPath string, aggregated report.AggregatedResult) (store.ScanReport, error) {
+	summaryJSON, err := json.Marshal(aggregated.Counts)
+	if err != nil {
+		return store.ScanReport{}, err
+	}
+
+	return store.ScanReport{
+		JobID:       uint64(jobID),
+		ReportPath:  reportPath,
+		SummaryJSON: string(summaryJSON),
+		HighCount:   aggregated.Counts["high"],
+		MediumCount: aggregated.Counts["medium"],
+		LowCount:    aggregated.Counts["low"],
+		RiskScore:   aggregated.TotalRiskScore,
+	}, nil
 }
 
 func shouldRunSAST(job Job) bool {

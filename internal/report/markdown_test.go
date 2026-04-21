@@ -1,6 +1,7 @@
 package report
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,20 +74,7 @@ func TestBuildMarkdownReportIncludesSummaryAndGroupedFindings(t *testing.T) {
 }
 
 func TestWriteMarkdownReportWritesFileToReportsDirectory(t *testing.T) {
-	workdir := t.TempDir()
-	previousDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get working directory: %v", err)
-	}
-
-	if err := os.Chdir(workdir); err != nil {
-		t.Fatalf("change directory: %v", err)
-	}
-	defer func() {
-		if err := os.Chdir(previousDir); err != nil {
-			t.Fatalf("restore working directory: %v", err)
-		}
-	}()
+	reportDir := filepath.Join(t.TempDir(), "reports")
 
 	result := AggregatedResult{
 		Counts: map[string]int{
@@ -98,12 +86,12 @@ func TestWriteMarkdownReportWritesFileToReportsDirectory(t *testing.T) {
 		},
 	}
 
-	reportPath, err := WriteMarkdownReport(7, result)
+	reportPath, err := WriteMarkdownReport(reportDir, 7, result)
 	if err != nil {
 		t.Fatalf("write markdown report: %v", err)
 	}
 
-	expectedPath := filepath.Join("reports", "7.md")
+	expectedPath := filepath.Join(reportDir, "7.md")
 	if reportPath != expectedPath {
 		t.Fatalf("expected report path %s, got %s", expectedPath, reportPath)
 	}
@@ -115,5 +103,41 @@ func TestWriteMarkdownReportWritesFileToReportsDirectory(t *testing.T) {
 
 	if !strings.Contains(string(content), "# Scan Report: Job 7") {
 		t.Fatalf("expected report file content to include job heading")
+	}
+}
+
+func TestReadMarkdownReportReadsExistingFile(t *testing.T) {
+	reportDir := filepath.Join(t.TempDir(), "reports")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatalf("mkdir reports: %v", err)
+	}
+
+	expected := "# Scan Report: Job 9\n"
+	if err := os.WriteFile(filepath.Join(reportDir, "9.md"), []byte(expected), 0o644); err != nil {
+		t.Fatalf("write report file: %v", err)
+	}
+
+	content, err := ReadMarkdownReport(reportDir, 9)
+	if err != nil {
+		t.Fatalf("read markdown report: %v", err)
+	}
+
+	if content != expected {
+		t.Fatalf("expected report content %q, got %q", expected, content)
+	}
+}
+
+func TestReadMarkdownReportReturnsNotFoundWhenMissing(t *testing.T) {
+	reportDir := filepath.Join(t.TempDir(), "reports")
+	_, err := ReadMarkdownReport(reportDir, 10)
+	if !errors.Is(err, ErrReportNotFound) {
+		t.Fatalf("expected ErrReportNotFound, got %v", err)
+	}
+}
+
+func TestWriteMarkdownReportRejectsRelativeReportDir(t *testing.T) {
+	_, err := WriteMarkdownReport("reports", 1, AggregatedResult{})
+	if !errors.Is(err, ErrInvalidReportDir) {
+		t.Fatalf("expected ErrInvalidReportDir, got %v", err)
 	}
 }

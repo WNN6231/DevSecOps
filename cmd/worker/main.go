@@ -28,7 +28,7 @@ func main() {
 		panic(err)
 	}
 
-	jobService := job.NewService(store.GetDB(), logger)
+	jobService := job.NewService(store.GetDB(), logger, cfg.ReportDir)
 	worker := job.NewWorker(jobService, sast.NewScanner(), logger, cfg.WorkerPollInterval)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
