@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"devsecops-platform/internal/report"
-	"devsecops-platform/internal/scanner/sast"
+	"devsecops-platform/internal/scanner"
 	"devsecops-platform/pkg/common"
 )
 
@@ -57,10 +57,12 @@ func runScan(args []string, cfg common.Config) (int, error) {
 		return 0, err
 	}
 
-	findings, enabledScanners, err := runEnabledScanners(repoPath)
+	findings, err := runEnabledScanners(repoPath)
 	if err != nil {
 		return 0, err
 	}
+
+	enabledScanners := scanner.EnabledScanners(nil)
 
 	aggregated := report.Aggregate(findings)
 	jsonReport := buildJSONReport(repoPath, enabledScanners, aggregated)
@@ -78,14 +80,12 @@ func runScan(args []string, cfg common.Config) (int, error) {
 	return 0, nil
 }
 
-func runEnabledScanners(repoPath string) ([]common.Finding, []string, error) {
-	enabledScanners := []string{"sast"}
-	findings, err := sast.NewScanner().Scan(repoPath, "local")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return findings, enabledScanners, nil
+func runEnabledScanners(repoPath string) ([]common.Finding, error) {
+	return scanner.RunScan(scanner.Job{
+		RepoURL:  repoPath,
+		Branch:   "local",
+		ScanType: nil, // run all
+	})
 }
 
 func buildJSONReport(repoPath string, enabledScanners []string, aggregated report.AggregatedResult) report.JSONReport {

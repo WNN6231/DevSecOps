@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"devsecops-platform/internal/report"
-	"devsecops-platform/internal/scanner/sast"
+	"devsecops-platform/internal/scanner"
 	"devsecops-platform/internal/store"
 	"devsecops-platform/pkg/common"
 
@@ -17,15 +17,13 @@ import (
 
 type Worker struct {
 	service      *Service
-	scanner      *sast.Scanner
 	logger       *slog.Logger
 	pollInterval time.Duration
 }
 
-func NewWorker(service *Service, scanner *sast.Scanner, logger *slog.Logger, pollInterval time.Duration) *Worker {
+func NewWorker(service *Service, logger *slog.Logger, pollInterval time.Duration) *Worker {
 	return &Worker{
 		service:      service,
-		scanner:      scanner,
 		logger:       logger,
 		pollInterval: pollInterval,
 	}
@@ -104,11 +102,11 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 }
 
 func (w *Worker) scan(job Job) ([]common.Finding, error) {
-	if !shouldRunSAST(job) {
-		return []common.Finding{}, nil
-	}
-
-	return w.scanner.Scan(job.RepoURL, job.Branch)
+	return scanner.RunScan(scanner.Job{
+		RepoURL:  job.RepoURL,
+		Branch:   job.Branch,
+		ScanType: job.ScanType,
+	})
 }
 
 func (w *Worker) failJob(ctx context.Context, jobID int64, scanErr error) error {
@@ -221,20 +219,6 @@ func buildScanReport(jobID int64, reportPath string, aggregated report.Aggregate
 		LowCount:    aggregated.Counts["low"],
 		RiskScore:   aggregated.TotalRiskScore,
 	}, nil
-}
-
-func shouldRunSAST(job Job) bool {
-	if len(job.ScanType) == 0 {
-		return true
-	}
-
-	for _, scanType := range job.ScanType {
-		if scanType == "sast" {
-			return true
-		}
-	}
-
-	return false
 }
 
 func determineFinalStatus(job Job, findings []common.Finding) string {

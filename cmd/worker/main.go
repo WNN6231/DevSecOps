@@ -7,7 +7,6 @@ import (
 	"syscall"
 
 	"devsecops-platform/internal/job"
-	"devsecops-platform/internal/scanner/sast"
 	"devsecops-platform/internal/store"
 	"devsecops-platform/pkg/common"
 )
@@ -29,7 +28,7 @@ func main() {
 	}
 
 	jobService := job.NewService(store.GetDB(), logger, cfg.ReportDir)
-	worker := job.NewWorker(jobService, sast.NewScanner(), logger, cfg.WorkerPollInterval)
+	worker := job.NewWorker(jobService, logger, cfg.WorkerPollInterval)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
