@@ -2,6 +2,7 @@ package sast
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -25,13 +26,17 @@ func NewScanner() *Scanner {
 	return &Scanner{}
 }
 
-func (s *Scanner) Scan(repoURL, branch string) ([]common.Finding, error) {
+func (s *Scanner) Scan(ctx context.Context, repoURL, branch string) ([]common.Finding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	repoPath, ok := resolveLocalRepoPath(repoURL)
 	if !ok {
 		return []common.Finding{mockFinding(repoURL, branch)}, nil
 	}
 
-	return scanRepo(repoPath)
+	return scanRepo(ctx, repoPath)
 }
 
 func resolveLocalRepoPath(repoURL string) (string, bool) {
@@ -47,11 +52,14 @@ func resolveLocalRepoPath(repoURL string) (string, bool) {
 	return repoURL, true
 }
 
-func scanRepo(repoPath string) ([]common.Finding, error) {
+func scanRepo(ctx context.Context, repoPath string) ([]common.Finding, error) {
 	findings := make([]common.Finding, 0)
 
 	err := filepath.WalkDir(repoPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 
@@ -63,7 +71,7 @@ func scanRepo(repoPath string) ([]common.Finding, error) {
 			return nil
 		}
 
-		fileFindings, err := scanGoFile(repoPath, path)
+		fileFindings, err := scanGoFile(ctx, repoPath, path)
 		if err != nil {
 			return err
 		}
@@ -78,7 +86,7 @@ func scanRepo(repoPath string) ([]common.Finding, error) {
 	return findings, nil
 }
 
-func scanGoFile(repoPath, path string) ([]common.Finding, error) {
+func scanGoFile(ctx context.Context, repoPath, path string) ([]common.Finding, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -95,6 +103,10 @@ func scanGoFile(repoPath, path string) ([]common.Finding, error) {
 	lineNumber := 0
 
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		lineNumber++
 		line := scanner.Text()
 		evidence := strings.TrimSpace(line)

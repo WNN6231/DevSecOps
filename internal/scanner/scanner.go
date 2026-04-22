@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 
 	"devsecops-platform/internal/scanner/dast"
@@ -12,7 +13,7 @@ import (
 
 // Scanner is the common interface every scan engine must implement.
 type Scanner interface {
-	Scan(repoURL, branch string) ([]common.Finding, error)
+	Scan(ctx context.Context, repoURL, branch string) ([]common.Finding, error)
 }
 
 // Job is the minimal view of a scan job the runner needs.
@@ -24,7 +25,7 @@ type Job struct {
 
 // RunScan orchestrates all requested scanner types and returns aggregated findings.
 // It is the single entry point shared by the API worker and the CLI.
-func RunScan(job Job) ([]common.Finding, error) {
+func RunScan(ctx context.Context, job Job) ([]common.Finding, error) {
 	enabled := resolveEnabled(job.ScanType)
 
 	registry := map[string]Scanner{
@@ -36,12 +37,16 @@ func RunScan(job Job) ([]common.Finding, error) {
 
 	var all []common.Finding
 	for _, name := range enabled {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		s, ok := registry[name]
 		if !ok {
 			return nil, fmt.Errorf("unknown scanner: %s", name)
 		}
 
-		findings, err := s.Scan(job.RepoURL, job.Branch)
+		findings, err := s.Scan(ctx, job.RepoURL, job.Branch)
 		if err != nil {
 			return nil, fmt.Errorf("%s scanner: %w", name, err)
 		}

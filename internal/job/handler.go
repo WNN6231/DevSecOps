@@ -34,6 +34,10 @@ func (h *Handler) createJob(c *gin.Context) {
 
 	job, err := h.service.Create(c.Request.Context(), req)
 	if err != nil {
+		if errors.Is(err, ErrInvalidMaxExecutionTime) {
+			common.WriteError(c, http.StatusBadRequest, "invalid max execution time")
+			return
+		}
 		common.WriteError(c, http.StatusInternalServerError, "internal error")
 		return
 	}

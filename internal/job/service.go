@@ -13,6 +13,8 @@ import (
 
 var ErrJobNotFound = errors.New("job not found")
 var ErrInvalidJobStatus = errors.New("invalid job status")
+var ErrInvalidJobStatusTransition = errors.New("invalid job status transition")
+var ErrInvalidMaxExecutionTime = errors.New("invalid max execution time")
 var ErrReportNotFound = errors.New("report not found")
 
 type Service struct {
@@ -30,7 +32,7 @@ func NewService(db *gorm.DB, logger *slog.Logger, reportDir string) *Service {
 }
 
 func (s *Service) CreateJob(repoURL, branch string) (Job, error) {
-	return s.createJob(context.Background(), repoURL, branch, nil, false)
+	return s.createJob(context.Background(), repoURL, branch, nil, false, 0)
 }
 
 func (s *Service) GetJob(id int64) (Job, error) {
@@ -42,7 +44,7 @@ func (s *Service) UpdateJobStatus(id int64, status string) (Job, error) {
 }
 
 func (s *Service) Create(ctx context.Context, req CreateJobRequest) (Job, error) {
-	return s.createJob(ctx, req.RepoURL, req.Branch, req.ScanType, req.BlockOnHigh)
+	return s.createJob(ctx, req.RepoURL, req.Branch, req.ScanType, req.BlockOnHigh, req.MaxExecutionTimeSec)
 }
 
 func (s *Service) GetByID(ctx context.Context, id int64) (Job, error) {
@@ -90,18 +92,23 @@ func (s *Service) GetReport(ctx context.Context, id int64) (ReportResponse, erro
 	}, nil
 }
 
-func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanType []string, blockOnHigh bool) (Job, error) {
+func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanType []string, blockOnHigh bool, maxExecutionTimeSec int) (Job, error) {
 	encodedScanType, err := encodeScanType(scanType)
+	if err != nil {
+		return Job{}, err
+	}
+	normalizedTimeoutSec, err := normalizeMaxExecutionTimeSec(maxExecutionTimeSec)
 	if err != nil {
 		return Job{}, err
 	}
 
 	record := store.ScanJob{
-		RepoURL:     repoURL,
-		Branch:      branch,
-		ScanType:    encodedScanType,
-		BlockOnHigh: blockOnHigh,
-		Status:      StatusPending,
+		RepoURL:             repoURL,
+		Branch:              branch,
+		ScanType:            encodedScanType,
+		BlockOnHigh:         blockOnHigh,
+		Status:              StatusPending,
+		MaxExecutionTimeSec: normalizedTimeoutSec,
 	}
 
 	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
@@ -159,6 +166,10 @@ func (s *Service) updateJobStatus(ctx context.Context, id int64, status string) 
 		return Job{}, err
 	}
 
+	if err := validateStatusTransition(record.Status, status); err != nil {
+		return Job{}, err
+	}
+
 	applyStatusTimestamps(&record, status)
 
 	if err := s.db.WithContext(ctx).Model(&record).Updates(map[string]interface{}{
@@ -182,6 +193,88 @@ func (s *Service) updateJobStatus(ctx context.Context, id int64, status string) 
 	return job, nil
 }
 
+func (s *Service) incrementAttemptCount(ctx context.Context, jobID int64) error {
+	result := s.db.WithContext(ctx).
+		Model(&store.ScanJob{}).
+		Where("id = ? AND status = ? AND attempt_count < ?", jobID, StatusRunning, maxJobAttempts).
+		Update("attempt_count", gorm.Expr("attempt_count + 1"))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrInvalidJobStatusTransition
+	}
+
+	return nil
+}
+
+func (s *Service) finalizeJobSuccess(ctx context.Context, job Job, reportPath string, aggregated report.AggregatedResult) error {
+	finalStatus := determineFinalStatus(job, aggregated.Findings)
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.saveResultsWithDB(ctx, tx, job.ID, aggregated.Findings); err != nil {
+			return err
+		}
+		if err := s.saveReportWithDB(ctx, tx, job.ID, reportPath, aggregated); err != nil {
+			return err
+		}
+		_, err := s.updateJobStatusWithDB(ctx, tx, job.ID, finalStatus)
+		return err
+	})
+}
+
+func (s *Service) markTimedOutRunningJobs(ctx context.Context, now time.Time) error {
+	var records []store.ScanJob
+	if err := s.db.WithContext(ctx).
+		Where("status = ?", StatusRunning).
+		Find(&records).Error; err != nil {
+		return err
+	}
+
+	for _, record := range records {
+		if !jobExecutionTimedOut(record, now) {
+			continue
+		}
+
+		if _, err := s.updateJobStatus(ctx, int64(record.ID), StatusFailed); err != nil && !errors.Is(err, ErrInvalidJobStatusTransition) {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) updateJobStatusWithDB(ctx context.Context, db *gorm.DB, id int64, status string) (Job, error) {
+	if !isValidStatus(status) {
+		return Job{}, ErrInvalidJobStatus
+	}
+
+	var record store.ScanJob
+	if err := db.WithContext(ctx).First(&record, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return Job{}, ErrJobNotFound
+		}
+
+		return Job{}, err
+	}
+
+	if err := validateStatusTransition(record.Status, status); err != nil {
+		return Job{}, err
+	}
+
+	applyStatusTimestamps(&record, status)
+
+	if err := db.WithContext(ctx).Model(&record).Updates(map[string]interface{}{
+		"status":      record.Status,
+		"started_at":  record.StartedAt,
+		"finished_at": record.FinishedAt,
+	}).Error; err != nil {
+		return Job{}, err
+	}
+
+	return fromRecord(record)
+}
+
 func isValidStatus(status string) bool {
 	switch status {
 	case StatusPending, StatusRunning, StatusSuccess, StatusFailed, StatusBlocked:
@@ -189,6 +282,25 @@ func isValidStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func validateStatusTransition(current, next string) error {
+	if current == next {
+		return nil
+	}
+
+	switch current {
+	case StatusPending:
+		if next == StatusRunning {
+			return nil
+		}
+	case StatusRunning:
+		if next == StatusSuccess || next == StatusFailed || next == StatusBlocked {
+			return nil
+		}
+	}
+
+	return ErrInvalidJobStatusTransition
 }
 
 func applyStatusTimestamps(record *store.ScanJob, status string) {
@@ -221,4 +333,21 @@ func applyStatusTimestamps(record *store.ScanJob, status string) {
 
 func timeNowUTC() time.Time {
 	return time.Now().UTC()
+}
+
+func jobExecutionTimedOut(record store.ScanJob, now time.Time) bool {
+	if record.Status != StatusRunning {
+		return false
+	}
+	if record.StartedAt == nil {
+		return true
+	}
+
+	maxExecutionTimeSec := record.MaxExecutionTimeSec
+	if maxExecutionTimeSec <= 0 {
+		maxExecutionTimeSec = defaultMaxExecutionTimeSec
+	}
+
+	deadline := record.StartedAt.Add(time.Duration(maxExecutionTimeSec) * time.Second)
+	return !now.Before(deadline)
 }

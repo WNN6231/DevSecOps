@@ -16,35 +16,45 @@ const (
 	StatusBlocked = "blocked"
 )
 
+const (
+	defaultMaxExecutionTimeSec = 300
+	maxJobAttempts             = 3
+)
+
 type CreateJobRequest struct {
-	RepoURL     string   `json:"repo_url"`
-	Branch      string   `json:"branch" binding:"required"`
-	ScanType    []string `json:"scan_type" binding:"required,min=1,dive,required,oneof=sast sca secret dast"`
-	BlockOnHigh bool     `json:"block_on_high"`
+	RepoURL             string   `json:"repo_url"`
+	Branch              string   `json:"branch" binding:"required"`
+	ScanType            []string `json:"scan_type" binding:"required,min=1,dive,required,oneof=sast sca secret dast"`
+	BlockOnHigh         bool     `json:"block_on_high"`
+	MaxExecutionTimeSec int      `json:"max_execution_time_sec"`
 }
 
 type Job struct {
-	ID          int64
-	RepoURL     string
-	Branch      string
-	ScanType    []string
-	BlockOnHigh bool
-	Status      string
-	CreatedAt   time.Time
-	StartedAt   *time.Time
-	FinishedAt  *time.Time
+	ID                  int64
+	RepoURL             string
+	Branch              string
+	ScanType            []string
+	BlockOnHigh         bool
+	Status              string
+	AttemptCount        int
+	MaxExecutionTimeSec int
+	CreatedAt           time.Time
+	StartedAt           *time.Time
+	FinishedAt          *time.Time
 }
 
 type JobResponse struct {
-	JobID       int64      `json:"job_id"`
-	Status      string     `json:"status"`
-	RepoURL     string     `json:"repo_url"`
-	Branch      string     `json:"branch"`
-	ScanType    []string   `json:"scan_type"`
-	BlockOnHigh bool       `json:"block_on_high"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	JobID               int64      `json:"job_id"`
+	Status              string     `json:"status"`
+	RepoURL             string     `json:"repo_url"`
+	Branch              string     `json:"branch"`
+	ScanType            []string   `json:"scan_type"`
+	BlockOnHigh         bool       `json:"block_on_high"`
+	AttemptCount        int        `json:"attempt_count"`
+	MaxExecutionTimeSec int        `json:"max_execution_time_sec"`
+	CreatedAt           time.Time  `json:"created_at"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
 }
 
 type ListResultsRequest struct {
@@ -97,29 +107,33 @@ func fromRecord(record store.ScanJob) (Job, error) {
 	}
 
 	return Job{
-		ID:          int64(record.ID),
-		RepoURL:     record.RepoURL,
-		Branch:      record.Branch,
-		ScanType:    scanType,
-		BlockOnHigh: record.BlockOnHigh,
-		Status:      record.Status,
-		CreatedAt:   record.CreatedAt,
-		StartedAt:   record.StartedAt,
-		FinishedAt:  record.FinishedAt,
+		ID:                  int64(record.ID),
+		RepoURL:             record.RepoURL,
+		Branch:              record.Branch,
+		ScanType:            scanType,
+		BlockOnHigh:         record.BlockOnHigh,
+		Status:              record.Status,
+		AttemptCount:        record.AttemptCount,
+		MaxExecutionTimeSec: record.MaxExecutionTimeSec,
+		CreatedAt:           record.CreatedAt,
+		StartedAt:           record.StartedAt,
+		FinishedAt:          record.FinishedAt,
 	}, nil
 }
 
 func (j Job) toResponse() JobResponse {
 	return JobResponse{
-		JobID:       j.ID,
-		Status:      j.Status,
-		RepoURL:     j.RepoURL,
-		Branch:      j.Branch,
-		ScanType:    append([]string(nil), j.ScanType...),
-		BlockOnHigh: j.BlockOnHigh,
-		CreatedAt:   j.CreatedAt,
-		StartedAt:   j.StartedAt,
-		FinishedAt:  j.FinishedAt,
+		JobID:               j.ID,
+		Status:              j.Status,
+		RepoURL:             j.RepoURL,
+		Branch:              j.Branch,
+		ScanType:            append([]string(nil), j.ScanType...),
+		BlockOnHigh:         j.BlockOnHigh,
+		AttemptCount:        j.AttemptCount,
+		MaxExecutionTimeSec: j.MaxExecutionTimeSec,
+		CreatedAt:           j.CreatedAt,
+		StartedAt:           j.StartedAt,
+		FinishedAt:          j.FinishedAt,
 	}
 }
 
@@ -192,4 +206,15 @@ func decodeScanType(value string) ([]string, error) {
 	}
 
 	return scanType, nil
+}
+
+func normalizeMaxExecutionTimeSec(value int) (int, error) {
+	if value == 0 {
+		return defaultMaxExecutionTimeSec, nil
+	}
+	if value < 0 {
+		return 0, ErrInvalidMaxExecutionTime
+	}
+
+	return value, nil
 }

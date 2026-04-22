@@ -3,15 +3,17 @@ package store
 import "time"
 
 type ScanJob struct {
-	ID          uint64     `gorm:"column:id;primaryKey;autoIncrement"`
-	RepoURL     string     `gorm:"column:repo_url;type:varchar(512);not null"`
-	Branch      string     `gorm:"column:branch;type:varchar(255);not null"`
-	ScanType    string     `gorm:"column:scan_type;type:text;not null"`
-	Status      string     `gorm:"column:status;type:varchar(32);not null"`
-	BlockOnHigh bool       `gorm:"column:block_on_high;not null;default:false"`
-	CreatedAt   time.Time  `gorm:"column:created_at;not null;autoCreateTime"`
-	StartedAt   *time.Time `gorm:"column:started_at"`
-	FinishedAt  *time.Time `gorm:"column:finished_at"`
+	ID                  uint64     `gorm:"column:id;primaryKey;autoIncrement"`
+	RepoURL             string     `gorm:"column:repo_url;type:varchar(512);not null"`
+	Branch              string     `gorm:"column:branch;type:varchar(255);not null"`
+	ScanType            string     `gorm:"column:scan_type;type:text;not null"`
+	Status              string     `gorm:"column:status;type:varchar(32);not null"`
+	BlockOnHigh         bool       `gorm:"column:block_on_high;not null;default:false"`
+	AttemptCount        int        `gorm:"column:attempt_count;not null;default:0"`
+	MaxExecutionTimeSec int        `gorm:"column:max_execution_time_sec;not null;default:300"`
+	CreatedAt           time.Time  `gorm:"column:created_at;not null;autoCreateTime"`
+	StartedAt           *time.Time `gorm:"column:started_at"`
+	FinishedAt          *time.Time `gorm:"column:finished_at"`
 }
 
 func (ScanJob) TableName() string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -19,6 +20,7 @@ type Worker struct {
 	service      *Service
 	logger       *slog.Logger
 	pollInterval time.Duration
+	scanFunc     func(context.Context, Job) ([]common.Finding, error)
 }
 
 func NewWorker(service *Service, logger *slog.Logger, pollInterval time.Duration) *Worker {
@@ -26,6 +28,7 @@ func NewWorker(service *Service, logger *slog.Logger, pollInterval time.Duration
 		service:      service,
 		logger:       logger,
 		pollInterval: pollInterval,
+		scanFunc:     runScanWithContext,
 	}
 }
 
@@ -47,6 +50,17 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) runCycle(ctx context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			w.logger.Error("worker cycle panicked", slog.Any("panic", recovered))
+		}
+	}()
+
+	if err := w.service.markTimedOutRunningJobs(ctx, timeNowUTC()); err != nil {
+		w.logger.Error("worker timed-out job recovery failed", slog.String("error", err.Error()))
+		return
+	}
+
 	processed, err := w.ProcessNext(ctx)
 	if err != nil {
 		w.logger.Error("worker cycle failed", slog.String("error", err.Error()))
@@ -64,34 +78,15 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	findings, err := w.scan(job)
+	finalStatus, aggregated, reportPath, attemptCount, err := w.processJobWithRetry(ctx, job)
 	if err != nil {
-		return true, w.failJob(ctx, job.ID, err)
-	}
-
-	aggregated := report.Aggregate(findings)
-
-	if err := w.service.saveResults(ctx, job.ID, aggregated.Findings); err != nil {
-		return true, w.failJob(ctx, job.ID, err)
-	}
-
-	reportPath, err := report.WriteMarkdownReport(w.service.reportDir, job.ID, aggregated)
-	if err != nil {
-		return true, w.failJob(ctx, job.ID, err)
-	}
-
-	if err := w.service.saveReport(ctx, job.ID, reportPath, aggregated); err != nil {
-		return true, w.failJob(ctx, job.ID, err)
-	}
-
-	finalStatus := determineFinalStatus(job, aggregated.Findings)
-	if _, err := w.service.updateJobStatus(ctx, job.ID, finalStatus); err != nil {
 		return true, err
 	}
 
 	w.logger.InfoContext(ctx, "job processed",
 		slog.Int64("job_id", job.ID),
 		slog.String("status", finalStatus),
+		slog.Int("attempt_count", attemptCount),
 		slog.Int("result_count", len(aggregated.Findings)),
 		slog.Any("severity_counts", aggregated.Counts),
 		slog.Int("risk_score", aggregated.TotalRiskScore),
@@ -101,8 +96,75 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (w *Worker) scan(job Job) ([]common.Finding, error) {
-	return scanner.RunScan(scanner.Job{
+func (w *Worker) processJobWithRetry(ctx context.Context, job Job) (string, report.AggregatedResult, string, int, error) {
+	maxExecutionTimeSec := job.MaxExecutionTimeSec
+	if maxExecutionTimeSec <= 0 {
+		maxExecutionTimeSec = defaultMaxExecutionTimeSec
+	}
+
+	jobCtx, cancel := context.WithTimeout(ctx, time.Duration(maxExecutionTimeSec)*time.Second)
+	defer cancel()
+
+	for attempt := 1; attempt <= maxJobAttempts; attempt++ {
+		if err := w.service.incrementAttemptCount(ctx, job.ID); err != nil {
+			return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+		}
+		job.AttemptCount = attempt
+
+		aggregated, reportPath, err := w.processSingleAttempt(jobCtx, job)
+		if err == nil {
+			if err := w.service.finalizeJobSuccess(ctx, job, reportPath, aggregated); err != nil {
+				return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+			}
+			return determineFinalStatus(job, aggregated.Findings), aggregated, reportPath, attempt, nil
+		}
+
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(jobCtx.Err(), context.DeadlineExceeded) {
+			return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+		}
+
+		if attempt == maxJobAttempts {
+			return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+		}
+
+		w.logger.WarnContext(ctx, "job attempt failed, retrying",
+			slog.Int64("job_id", job.ID),
+			slog.Int("attempt", attempt),
+			slog.Int("max_attempts", maxJobAttempts),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	return "", report.AggregatedResult{}, "", maxJobAttempts, w.failJob(ctx, job.ID, errors.New("job retry loop exited unexpectedly"))
+}
+
+func (w *Worker) processSingleAttempt(ctx context.Context, job Job) (aggregated report.AggregatedResult, reportPath string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("worker panic recovered: %v", recovered)
+		}
+	}()
+
+	findings, err := w.scan(ctx, job)
+	if err != nil {
+		return report.AggregatedResult{}, "", err
+	}
+
+	aggregated = report.Aggregate(findings)
+	reportPath, err = report.WriteMarkdownReport(w.service.reportDir, job.ID, aggregated)
+	if err != nil {
+		return report.AggregatedResult{}, "", err
+	}
+
+	return aggregated, reportPath, nil
+}
+
+func (w *Worker) scan(ctx context.Context, job Job) ([]common.Finding, error) {
+	return w.scanFunc(ctx, job)
+}
+
+func runScanWithContext(ctx context.Context, job Job) ([]common.Finding, error) {
+	return scanner.RunScan(ctx, scanner.Job{
 		RepoURL:  job.RepoURL,
 		Branch:   job.Branch,
 		ScanType: job.ScanType,
@@ -110,7 +172,7 @@ func (w *Worker) scan(job Job) ([]common.Finding, error) {
 }
 
 func (w *Worker) failJob(ctx context.Context, jobID int64, scanErr error) error {
-	if _, err := w.service.updateJobStatus(ctx, jobID, StatusFailed); err != nil {
+	if _, err := w.service.updateJobStatus(ctx, jobID, StatusFailed); err != nil && !errors.Is(err, ErrInvalidJobStatusTransition) {
 		return errors.Join(scanErr, err)
 	}
 
@@ -165,22 +227,30 @@ func (s *Service) claimNextPendingJob(ctx context.Context) (Job, bool, error) {
 }
 
 func (s *Service) saveResults(ctx context.Context, jobID int64, findings []common.Finding) error {
+	return s.saveResultsWithDB(ctx, s.db, jobID, findings)
+}
+
+func (s *Service) saveResultsWithDB(ctx context.Context, db *gorm.DB, jobID int64, findings []common.Finding) error {
 	if len(findings) == 0 {
 		return nil
 	}
 
 	records := buildScanResults(jobID, findings)
 
-	return s.db.WithContext(ctx).Create(&records).Error
+	return db.WithContext(ctx).Create(&records).Error
 }
 
 func (s *Service) saveReport(ctx context.Context, jobID int64, reportPath string, aggregated report.AggregatedResult) error {
+	return s.saveReportWithDB(ctx, s.db, jobID, reportPath, aggregated)
+}
+
+func (s *Service) saveReportWithDB(ctx context.Context, db *gorm.DB, jobID int64, reportPath string, aggregated report.AggregatedResult) error {
 	record, err := buildScanReport(jobID, reportPath, aggregated)
 	if err != nil {
 		return err
 	}
 
-	return s.db.WithContext(ctx).Create(&record).Error
+	return db.WithContext(ctx).Create(&record).Error
 }
 
 func buildScanResults(jobID int64, findings []common.Finding) []store.ScanResult {

@@ -1,6 +1,7 @@
 package sast
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,7 +23,7 @@ func main() {
 		t.Fatalf("write source file: %v", err)
 	}
 
-	findings, err := NewScanner().Scan(repoPath, "main")
+	findings, err := NewScanner().Scan(context.Background(), repoPath, "main")
 	if err != nil {
 		t.Fatalf("scan repo: %v", err)
 	}
@@ -45,7 +46,7 @@ func main() {
 }
 
 func TestScanFallsBackToMockFindingWhenRepoIsMissing(t *testing.T) {
-	findings, err := NewScanner().Scan(filepath.Join(t.TempDir(), "missing"), "main")
+	findings, err := NewScanner().Scan(context.Background(), filepath.Join(t.TempDir(), "missing"), "main")
 	if err != nil {
 		t.Fatalf("scan missing repo: %v", err)
 	}

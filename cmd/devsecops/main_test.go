@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"devsecops-platform/internal/report"
@@ -77,7 +79,8 @@ func TestRunScanFailsOnHigh(t *testing.T) {
 		}
 	}()
 
-	exitCode, err := run([]string{"scan", "--fail-on-high"}, cfg)
+	var stdout bytes.Buffer
+	exitCode, err := runWithWriter([]string{"scan", "--fail-on-high"}, cfg, &stdout)
 	if err != nil {
 		t.Fatalf("run scan: %v", err)
 	}
@@ -104,5 +107,73 @@ func TestRunScanFailsOnHigh(t *testing.T) {
 
 	if len(sarifReport.Runs) != 1 {
 		t.Fatalf("expected 1 sarif run, got %d", len(sarifReport.Runs))
+	}
+}
+
+func TestRunCIModeFailsOnHighAndPrintsCILogs(t *testing.T) {
+	cfg := common.Config{
+		ReportDir: filepath.Join(t.TempDir(), "reports"),
+	}
+
+	repoPath := t.TempDir()
+	source := "package main\n\nfunc main() {\n\tapiToken := \"super-secret-token\"\n}\n"
+	if err := os.WriteFile(filepath.Join(repoPath, "main.go"), []byte(source), 0o644); err != nil {
+		t.Fatalf("write test repo file: %v", err)
+	}
+
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+
+	if err := os.Chdir(repoPath); err != nil {
+		t.Fatalf("change directory: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousDir); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	exitCode, err := runWithWriter([]string{"run", "--ci-mode"}, cfg, &stdout)
+	if err != nil {
+		t.Fatalf("run ci mode: %v", err)
+	}
+
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+
+	output := stdout.String()
+	expectedParts := []string{
+		"[CI] Pipeline started",
+		"[CI] Stage: security-scan",
+		"[CI] Running full scan with scanners:",
+		"[CI] Findings summary:",
+		"[CI] Artifact generated:",
+		"[CI] Result: FAILED",
+	}
+
+	for _, expected := range expectedParts {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected CI output to contain %q, got %q", expected, output)
+		}
+	}
+}
+
+func TestRunRejectsMissingCIModeFlag(t *testing.T) {
+	cfg := common.Config{
+		ReportDir: filepath.Join(t.TempDir(), "reports"),
+	}
+
+	var stdout bytes.Buffer
+	_, err := runWithWriter([]string{"run"}, cfg, &stdout)
+	if err == nil {
+		t.Fatal("expected run without --ci-mode to fail")
+	}
+
+	if !strings.Contains(err.Error(), "usage: devsecops run --ci-mode") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
