@@ -14,6 +14,9 @@ import (
 var ErrJobNotFound = errors.New("job not found")
 var ErrInvalidJobStatus = errors.New("invalid job status")
 var ErrInvalidJobStatusTransition = errors.New("invalid job status transition")
+var ErrInvalidRepoURL = errors.New("invalid repo url")
+var ErrInvalidBranch = errors.New("invalid branch")
+var ErrInvalidScanType = errors.New("invalid scan type")
 var ErrInvalidMaxExecutionTime = errors.New("invalid max execution time")
 var ErrReportNotFound = errors.New("report not found")
 
@@ -21,6 +24,7 @@ type Service struct {
 	reportDir string
 	db        *gorm.DB
 	logger    *slog.Logger
+	metrics   *Metrics
 }
 
 func NewService(db *gorm.DB, logger *slog.Logger, reportDir string) *Service {
@@ -28,6 +32,7 @@ func NewService(db *gorm.DB, logger *slog.Logger, reportDir string) *Service {
 		reportDir: reportDir,
 		db:        db,
 		logger:    logger,
+		metrics:   &Metrics{},
 	}
 }
 
@@ -49,6 +54,10 @@ func (s *Service) Create(ctx context.Context, req CreateJobRequest) (Job, error)
 
 func (s *Service) GetByID(ctx context.Context, id int64) (Job, error) {
 	return s.getJob(ctx, id)
+}
+
+func (s *Service) MetricsSnapshot() MetricsSnapshot {
+	return s.metrics.Snapshot()
 }
 
 func (s *Service) GetResults(ctx context.Context, id int64, req ListResultsRequest) (ResultsResponse, error) {
@@ -93,6 +102,11 @@ func (s *Service) GetReport(ctx context.Context, id int64) (ReportResponse, erro
 }
 
 func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanType []string, blockOnHigh bool, maxExecutionTimeSec int) (Job, error) {
+	repoURL, branch, scanType, err := sanitizeCreateJobInput(repoURL, branch, scanType)
+	if err != nil {
+		return Job{}, err
+	}
+
 	encodedScanType, err := encodeScanType(scanType)
 	if err != nil {
 		return Job{}, err
@@ -123,7 +137,7 @@ func (s *Service) createJob(ctx context.Context, repoURL, branch string, scanTyp
 	s.logger.InfoContext(ctx, "job created",
 		slog.Int64("job_id", job.ID),
 		slog.String("status", job.Status),
-		slog.String("repo_url", job.RepoURL),
+		slog.String("repo_url", redactRepoURLForLog(job.RepoURL)),
 	)
 
 	return job, nil
@@ -170,6 +184,7 @@ func (s *Service) updateJobStatus(ctx context.Context, id int64, status string) 
 		return Job{}, err
 	}
 
+	previousStatus := record.Status
 	applyStatusTimestamps(&record, status)
 
 	if err := s.db.WithContext(ctx).Model(&record).Updates(map[string]interface{}{
@@ -178,6 +193,10 @@ func (s *Service) updateJobStatus(ctx context.Context, id int64, status string) 
 		"finished_at": record.FinishedAt,
 	}).Error; err != nil {
 		return Job{}, err
+	}
+
+	if previousStatus != record.Status {
+		s.recordStatusMetrics(record.Status)
 	}
 
 	job, err := fromRecord(record)
@@ -236,6 +255,15 @@ func (s *Service) markTimedOutRunningJobs(ctx context.Context, now time.Time) er
 			continue
 		}
 
+		attrs := []any{
+			slog.Uint64("job_id", record.ID),
+			slog.Int("max_execution_time_sec", record.MaxExecutionTimeSec),
+		}
+		if record.StartedAt != nil {
+			attrs = append(attrs, slog.Time("started_at", *record.StartedAt))
+		}
+		s.logger.WarnContext(ctx, "timed-out running job marked failed", attrs...)
+
 		if _, err := s.updateJobStatus(ctx, int64(record.ID), StatusFailed); err != nil && !errors.Is(err, ErrInvalidJobStatusTransition) {
 			return err
 		}
@@ -262,6 +290,7 @@ func (s *Service) updateJobStatusWithDB(ctx context.Context, db *gorm.DB, id int
 		return Job{}, err
 	}
 
+	previousStatus := record.Status
 	applyStatusTimestamps(&record, status)
 
 	if err := db.WithContext(ctx).Model(&record).Updates(map[string]interface{}{
@@ -272,7 +301,18 @@ func (s *Service) updateJobStatusWithDB(ctx context.Context, db *gorm.DB, id int
 		return Job{}, err
 	}
 
+	if previousStatus != record.Status {
+		s.recordStatusMetrics(record.Status)
+	}
+
 	return fromRecord(record)
+}
+
+func (s *Service) recordStatusMetrics(status string) {
+	switch status {
+	case StatusSuccess, StatusFailed, StatusBlocked:
+		s.metrics.recordTerminalStatus(status)
+	}
 }
 
 func isValidStatus(status string) bool {

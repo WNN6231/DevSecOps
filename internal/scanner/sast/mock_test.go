@@ -63,3 +63,16 @@ func TestScanFallsBackToMockFindingWhenRepoIsMissing(t *testing.T) {
 		t.Fatalf("expected info severity, got %s", findings[0].Severity)
 	}
 }
+
+func TestResolveLocalRepoPathRejectsTraversalInput(t *testing.T) {
+	if _, ok := resolveLocalRepoPath(filepath.Join("..", "repo")); ok {
+		t.Fatal("expected traversal repo path to be rejected")
+	}
+}
+
+func TestMockFindingRedactsRepositoryReference(t *testing.T) {
+	finding := mockFinding("https://user:token@example.com/repo.git", "main")
+	if finding.Evidence != "repo=[remote-repository] branch=main" {
+		t.Fatalf("unexpected evidence: %s", finding.Evidence)
+	}
+}

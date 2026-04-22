@@ -34,8 +34,8 @@ func (h *Handler) createJob(c *gin.Context) {
 
 	job, err := h.service.Create(c.Request.Context(), req)
 	if err != nil {
-		if errors.Is(err, ErrInvalidMaxExecutionTime) {
-			common.WriteError(c, http.StatusBadRequest, "invalid max execution time")
+		if isInputValidationError(err) {
+			common.WriteError(c, http.StatusBadRequest, "invalid request")
 			return
 		}
 		common.WriteError(c, http.StatusInternalServerError, "internal error")

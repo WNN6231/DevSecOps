@@ -19,3 +19,14 @@ func TestRunScanReturnsContextErrorWhenCanceled(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
+
+func TestRunScanRejectsUnknownScanner(t *testing.T) {
+	_, err := RunScan(context.Background(), Job{
+		RepoURL:  "",
+		Branch:   "main",
+		ScanType: []string{"unknown"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid scanner selection to fail")
+	}
+}

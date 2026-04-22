@@ -20,7 +20,7 @@ type Worker struct {
 	service      *Service
 	logger       *slog.Logger
 	pollInterval time.Duration
-	scanFunc     func(context.Context, Job) ([]common.Finding, error)
+	scanFunc     func(context.Context, Job, *slog.Logger) ([]common.Finding, error)
 }
 
 func NewWorker(service *Service, logger *slog.Logger, pollInterval time.Duration) *Worker {
@@ -78,74 +78,97 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	finalStatus, aggregated, reportPath, attemptCount, err := w.processJobWithRetry(ctx, job)
+	jobLogger := w.logger.With(slog.Int64("job_id", job.ID))
+	finalStatus, aggregated, reportPath, attemptCount, scanDuration, err := w.processJobWithRetry(ctx, job, jobLogger)
 	if err != nil {
+		jobLogger.ErrorContext(ctx, "job processing failed",
+			slog.Int("attempt_count", attemptCount),
+			slog.Duration("total_scan_duration", scanDuration),
+			slog.String("error", err.Error()),
+			slog.Any("metrics", w.service.MetricsSnapshot()),
+		)
 		return true, err
 	}
 
-	w.logger.InfoContext(ctx, "job processed",
-		slog.Int64("job_id", job.ID),
+	jobLogger.InfoContext(ctx, "job risk summary",
+		slog.Any("severity_counts", aggregated.Counts),
+		slog.Int("risk_score", aggregated.TotalRiskScore),
+		slog.String("status", finalStatus),
+	)
+
+	jobLogger.InfoContext(ctx, "job processed",
 		slog.String("status", finalStatus),
 		slog.Int("attempt_count", attemptCount),
 		slog.Int("result_count", len(aggregated.Findings)),
-		slog.Any("severity_counts", aggregated.Counts),
-		slog.Int("risk_score", aggregated.TotalRiskScore),
+		slog.Duration("total_scan_duration", scanDuration),
 		slog.String("report_path", reportPath),
+		slog.Any("metrics", w.service.MetricsSnapshot()),
 	)
 
 	return true, nil
 }
 
-func (w *Worker) processJobWithRetry(ctx context.Context, job Job) (string, report.AggregatedResult, string, int, error) {
+func (w *Worker) processJobWithRetry(ctx context.Context, job Job, logger *slog.Logger) (string, report.AggregatedResult, string, int, time.Duration, error) {
 	maxExecutionTimeSec := job.MaxExecutionTimeSec
 	if maxExecutionTimeSec <= 0 {
 		maxExecutionTimeSec = defaultMaxExecutionTimeSec
 	}
 
+	jobStartedAt := time.Now()
 	jobCtx, cancel := context.WithTimeout(ctx, time.Duration(maxExecutionTimeSec)*time.Second)
 	defer cancel()
 
 	for attempt := 1; attempt <= maxJobAttempts; attempt++ {
 		if err := w.service.incrementAttemptCount(ctx, job.ID); err != nil {
-			return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+			return "", report.AggregatedResult{}, "", attempt, time.Since(jobStartedAt), w.failJob(ctx, job.ID, err)
 		}
 		job.AttemptCount = attempt
 
-		aggregated, reportPath, err := w.processSingleAttempt(jobCtx, job)
+		logger.InfoContext(ctx, "job attempt started",
+			slog.Int("attempt", attempt),
+			slog.Int("max_attempts", maxJobAttempts),
+			slog.Int("max_execution_time_sec", maxExecutionTimeSec),
+		)
+
+		aggregated, reportPath, err := w.processSingleAttempt(jobCtx, job, logger)
 		if err == nil {
 			if err := w.service.finalizeJobSuccess(ctx, job, reportPath, aggregated); err != nil {
-				return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+				return "", report.AggregatedResult{}, "", attempt, time.Since(jobStartedAt), w.failJob(ctx, job.ID, err)
 			}
-			return determineFinalStatus(job, aggregated.Findings), aggregated, reportPath, attempt, nil
+			return determineFinalStatus(job, aggregated.Findings), aggregated, reportPath, attempt, time.Since(jobStartedAt), nil
 		}
 
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(jobCtx.Err(), context.DeadlineExceeded) {
-			return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+			logger.ErrorContext(ctx, "job attempt timed out",
+				slog.Int("attempt", attempt),
+				slog.Duration("elapsed", time.Since(jobStartedAt)),
+				slog.String("error", err.Error()),
+			)
+			return "", report.AggregatedResult{}, "", attempt, time.Since(jobStartedAt), w.failJob(ctx, job.ID, err)
 		}
 
 		if attempt == maxJobAttempts {
-			return "", report.AggregatedResult{}, "", attempt, w.failJob(ctx, job.ID, err)
+			return "", report.AggregatedResult{}, "", attempt, time.Since(jobStartedAt), w.failJob(ctx, job.ID, err)
 		}
 
-		w.logger.WarnContext(ctx, "job attempt failed, retrying",
-			slog.Int64("job_id", job.ID),
+		logger.WarnContext(ctx, "job attempt failed, retrying",
 			slog.Int("attempt", attempt),
 			slog.Int("max_attempts", maxJobAttempts),
 			slog.String("error", err.Error()),
 		)
 	}
 
-	return "", report.AggregatedResult{}, "", maxJobAttempts, w.failJob(ctx, job.ID, errors.New("job retry loop exited unexpectedly"))
+	return "", report.AggregatedResult{}, "", maxJobAttempts, time.Since(jobStartedAt), w.failJob(ctx, job.ID, errors.New("job retry loop exited unexpectedly"))
 }
 
-func (w *Worker) processSingleAttempt(ctx context.Context, job Job) (aggregated report.AggregatedResult, reportPath string, err error) {
+func (w *Worker) processSingleAttempt(ctx context.Context, job Job, logger *slog.Logger) (aggregated report.AggregatedResult, reportPath string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("worker panic recovered: %v", recovered)
 		}
 	}()
 
-	findings, err := w.scan(ctx, job)
+	findings, err := w.scan(ctx, job, logger)
 	if err != nil {
 		return report.AggregatedResult{}, "", err
 	}
@@ -159,15 +182,29 @@ func (w *Worker) processSingleAttempt(ctx context.Context, job Job) (aggregated 
 	return aggregated, reportPath, nil
 }
 
-func (w *Worker) scan(ctx context.Context, job Job) ([]common.Finding, error) {
-	return w.scanFunc(ctx, job)
+func (w *Worker) scan(ctx context.Context, job Job, logger *slog.Logger) ([]common.Finding, error) {
+	return w.scanFunc(ctx, job, logger)
 }
 
-func runScanWithContext(ctx context.Context, job Job) ([]common.Finding, error) {
+func runScanWithContext(ctx context.Context, job Job, logger *slog.Logger) ([]common.Finding, error) {
 	return scanner.RunScan(ctx, scanner.Job{
 		RepoURL:  job.RepoURL,
 		Branch:   job.Branch,
 		ScanType: job.ScanType,
+		ObserveScanner: func(name string, duration time.Duration, findingCount int, err error) {
+			attrs := []any{
+				slog.String("scanner", name),
+				slog.Duration("duration", duration),
+				slog.Int("finding_count", findingCount),
+			}
+			if err != nil {
+				attrs = append(attrs, slog.String("error", err.Error()))
+				logger.ErrorContext(ctx, "scanner execution completed", attrs...)
+				return
+			}
+
+			logger.InfoContext(ctx, "scanner execution completed", attrs...)
+		},
 	})
 }
 

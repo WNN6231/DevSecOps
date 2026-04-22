@@ -40,16 +40,12 @@ func (s *Scanner) Scan(ctx context.Context, repoURL, branch string) ([]common.Fi
 }
 
 func resolveLocalRepoPath(repoURL string) (string, bool) {
-	if repoURL == "" {
+	repoPath, err := sanitizeLocalRepoPath(repoURL)
+	if err != nil {
 		return "", false
 	}
 
-	info, err := os.Stat(repoURL)
-	if err != nil || !info.IsDir() {
-		return "", false
-	}
-
-	return repoURL, true
+	return repoPath, true
 }
 
 func scanRepo(ctx context.Context, repoPath string) ([]common.Finding, error) {
@@ -66,8 +62,15 @@ func scanRepo(ctx context.Context, repoPath string) ([]common.Finding, error) {
 		if entry.IsDir() {
 			return nil
 		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
 
 		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+
+		if !pathWithinRoot(repoPath, path) {
 			return nil
 		}
 
@@ -170,6 +173,7 @@ func newFinding(ruleID, severity, title, description, filePath string, lineNumbe
 
 func mockFinding(repoURL, branch string) common.Finding {
 	hash := sha256.Sum256([]byte(repoURL + ":" + branch + ":mock-sast"))
+	redactedRepo := redactRepositoryReference(repoURL)
 
 	return common.Finding{
 		Scanner:        "sast",
@@ -179,8 +183,62 @@ func mockFinding(repoURL, branch string) common.Finding {
 		Description:    "The repository was not available locally, so the mock SAST scanner skipped source inspection.",
 		FilePath:       "",
 		LineNumber:     0,
-		Evidence:       fmt.Sprintf("repo=%s branch=%s", repoURL, branch),
+		Evidence:       fmt.Sprintf("repo=%s branch=%s", redactedRepo, branch),
 		Recommendation: "Provide a local repository path to enable Go file scanning in the mock scanner.",
 		Hash:           hex.EncodeToString(hash[:]),
 	}
+}
+
+func sanitizeLocalRepoPath(repoURL string) (string, error) {
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" || strings.ContainsRune(repoURL, '\x00') || hasLocalTraversal(repoURL) {
+		return "", os.ErrInvalid
+	}
+
+	repoPath, err := filepath.Abs(filepath.Clean(repoURL))
+	if err != nil {
+		return "", err
+	}
+
+	info, err := os.Stat(repoPath)
+	if err != nil || !info.IsDir() {
+		return "", os.ErrInvalid
+	}
+
+	return repoPath, nil
+}
+
+func pathWithinRoot(root, target string) bool {
+	relativePath, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+
+	return relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(filepath.Separator))
+}
+
+func hasLocalTraversal(value string) bool {
+	segments := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+
+	for _, segment := range segments {
+		if segment == ".." {
+			return true
+		}
+	}
+
+	return false
+}
+
+func redactRepositoryReference(repoURL string) string {
+	if repoURL == "" {
+		return ""
+	}
+
+	if strings.Contains(repoURL, "://") {
+		return "[remote-repository]"
+	}
+
+	return filepath.Base(filepath.Clean(repoURL))
 }

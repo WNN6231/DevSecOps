@@ -98,7 +98,7 @@ func TestProcessSingleAttemptRecoversPanic(t *testing.T) {
 			logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		scanFunc: func(context.Context, Job) ([]common.Finding, error) {
+		scanFunc: func(context.Context, Job, *slog.Logger) ([]common.Finding, error) {
 			panic("boom")
 		},
 	}
@@ -106,7 +106,7 @@ func TestProcessSingleAttemptRecoversPanic(t *testing.T) {
 	_, _, err := worker.processSingleAttempt(context.Background(), Job{
 		ID:                  7,
 		MaxExecutionTimeSec: 60,
-	})
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil {
 		t.Fatal("expected recovered panic error")
 	}

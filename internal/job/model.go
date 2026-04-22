@@ -22,8 +22,8 @@ const (
 )
 
 type CreateJobRequest struct {
-	RepoURL             string   `json:"repo_url"`
-	Branch              string   `json:"branch" binding:"required"`
+	RepoURL             string   `json:"repo_url" binding:"required,max=512"`
+	Branch              string   `json:"branch" binding:"required,max=255"`
 	ScanType            []string `json:"scan_type" binding:"required,min=1,dive,required,oneof=sast sca secret dast"`
 	BlockOnHigh         bool     `json:"block_on_high"`
 	MaxExecutionTimeSec int      `json:"max_execution_time_sec"`

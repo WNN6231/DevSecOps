@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"devsecops-platform/internal/scanner/dast"
 	"devsecops-platform/internal/scanner/sast"
@@ -18,15 +19,19 @@ type Scanner interface {
 
 // Job is the minimal view of a scan job the runner needs.
 type Job struct {
-	RepoURL  string
-	Branch   string
-	ScanType []string // "sast" | "secret" | "sca" | "dast"; empty means all
+	RepoURL        string
+	Branch         string
+	ScanType       []string // "sast" | "secret" | "sca" | "dast"; empty means all
+	ObserveScanner func(name string, duration time.Duration, findingCount int, err error)
 }
 
 // RunScan orchestrates all requested scanner types and returns aggregated findings.
 // It is the single entry point shared by the API worker and the CLI.
 func RunScan(ctx context.Context, job Job) ([]common.Finding, error) {
-	enabled := resolveEnabled(job.ScanType)
+	enabled, err := resolveEnabled(job.ScanType)
+	if err != nil {
+		return nil, err
+	}
 
 	registry := map[string]Scanner{
 		"sast":   sast.NewScanner(),
@@ -46,7 +51,12 @@ func RunScan(ctx context.Context, job Job) ([]common.Finding, error) {
 			return nil, fmt.Errorf("unknown scanner: %s", name)
 		}
 
+		startedAt := time.Now()
 		findings, err := s.Scan(ctx, job.RepoURL, job.Branch)
+		duration := time.Since(startedAt)
+		if job.ObserveScanner != nil {
+			job.ObserveScanner(name, duration, len(findings), err)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s scanner: %w", name, err)
 		}
@@ -60,17 +70,41 @@ func RunScan(ctx context.Context, job Job) ([]common.Finding, error) {
 // EnabledScanners returns the scanner names that RunScan will invoke for a given job.
 // Callers use this to populate report metadata without re-running scans.
 func EnabledScanners(scanType []string) []string {
-	return resolveEnabled(scanType)
+	enabled, err := resolveEnabled(scanType)
+	if err != nil {
+		return []string{}
+	}
+
+	return enabled
 }
 
 var allScanners = []string{"sast", "secret", "sca", "dast"}
 
-func resolveEnabled(scanType []string) []string {
+func resolveEnabled(scanType []string) ([]string, error) {
 	if len(scanType) == 0 {
 		out := make([]string, len(allScanners))
 		copy(out, allScanners)
-		return out
+		return out, nil
 	}
 
-	return append([]string(nil), scanType...)
+	registry := make(map[string]struct{}, len(allScanners))
+	for _, name := range allScanners {
+		registry[name] = struct{}{}
+	}
+
+	out := make([]string, 0, len(scanType))
+	seen := make(map[string]struct{}, len(scanType))
+	for _, name := range scanType {
+		if _, ok := registry[name]; !ok {
+			return nil, fmt.Errorf("unknown scanner: %s", name)
+		}
+		if _, exists := seen[name]; exists {
+			return nil, fmt.Errorf("duplicate scanner: %s", name)
+		}
+
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+
+	return out, nil
 }
