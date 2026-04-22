@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"devsecops-platform/pkg/common"
 )
 
 type JSONReport struct {
 	ScannedPath     string          `json:"scanned_path"`
 	EnabledScanners []string        `json:"enabled_scanners"`
 	Findings        []FindingReport `json:"findings"`
-	Summary         map[string]int  `json:"summary"`
+	Summary         SeveritySummary `json:"summary"`
 	TotalRiskScore  int             `json:"total_risk_score"`
 }
 
@@ -27,7 +29,41 @@ type FindingReport struct {
 	Hash           string `json:"hash"`
 }
 
+func BuildJSONReport(repoPath string, enabledScanners []string, aggregated AggregatedResult) JSONReport {
+	findings := make([]FindingReport, 0, len(aggregated.Findings))
+	for _, finding := range aggregated.Findings {
+		findings = append(findings, findingReportFromFinding(finding))
+	}
+
+	return JSONReport{
+		ScannedPath:     repoPath,
+		EnabledScanners: append([]string(nil), enabledScanners...),
+		Findings:        findings,
+		Summary:         buildSeveritySummary(aggregated),
+		TotalRiskScore:  aggregated.TotalRiskScore,
+	}
+}
+
 func WriteJSONReport(reportDir, filename string, report JSONReport) (string, error) {
+	return writeStructuredReport(reportDir, filename, report)
+}
+
+func findingReportFromFinding(finding common.Finding) FindingReport {
+	return FindingReport{
+		Scanner:        finding.Scanner,
+		Severity:       finding.Severity,
+		RuleID:         finding.RuleID,
+		Title:          finding.Title,
+		Description:    finding.Description,
+		FilePath:       finding.FilePath,
+		LineNumber:     finding.LineNumber,
+		Evidence:       finding.Evidence,
+		Recommendation: finding.Recommendation,
+		Hash:           finding.Hash,
+	}
+}
+
+func writeStructuredReport(reportDir, filename string, report interface{}) (string, error) {
 	if !filepath.IsAbs(reportDir) {
 		return "", ErrInvalidReportDir
 	}

@@ -13,6 +13,7 @@ import (
 )
 
 const jsonReportFilename = "cli-scan.json"
+const sarifReportFilename = "cli-scan.sarif.json"
 
 func main() {
 	cfg, err := common.LoadConfig()
@@ -65,13 +66,19 @@ func runScan(args []string, cfg common.Config) (int, error) {
 	enabledScanners := scanner.EnabledScanners(nil)
 
 	aggregated := report.Aggregate(findings)
-	jsonReport := buildJSONReport(repoPath, enabledScanners, aggregated)
+	jsonReport := report.BuildJSONReport(repoPath, enabledScanners, aggregated)
 	reportPath, err := report.WriteJSONReport(cfg.ReportDir, jsonReportFilename, jsonReport)
 	if err != nil {
 		return 0, err
 	}
 
-	printSummary(repoPath, enabledScanners, aggregated, reportPath)
+	sarifReport := report.BuildSARIFReport(repoPath, enabledScanners, aggregated)
+	sarifReportPath, err := report.WriteSARIFReport(cfg.ReportDir, sarifReportFilename, sarifReport)
+	if err != nil {
+		return 0, err
+	}
+
+	printSummary(repoPath, enabledScanners, aggregated, reportPath, sarifReportPath)
 
 	if *failOnHigh && hasBlockingFindings(aggregated) {
 		return 1, nil
@@ -88,33 +95,7 @@ func runEnabledScanners(repoPath string) ([]common.Finding, error) {
 	})
 }
 
-func buildJSONReport(repoPath string, enabledScanners []string, aggregated report.AggregatedResult) report.JSONReport {
-	findings := make([]report.FindingReport, 0, len(aggregated.Findings))
-	for _, finding := range aggregated.Findings {
-		findings = append(findings, report.FindingReport{
-			Scanner:        finding.Scanner,
-			Severity:       finding.Severity,
-			RuleID:         finding.RuleID,
-			Title:          finding.Title,
-			Description:    finding.Description,
-			FilePath:       finding.FilePath,
-			LineNumber:     finding.LineNumber,
-			Evidence:       finding.Evidence,
-			Recommendation: finding.Recommendation,
-			Hash:           finding.Hash,
-		})
-	}
-
-	return report.JSONReport{
-		ScannedPath:     repoPath,
-		EnabledScanners: append([]string(nil), enabledScanners...),
-		Findings:        findings,
-		Summary:         aggregated.Counts,
-		TotalRiskScore:  aggregated.TotalRiskScore,
-	}
-}
-
-func printSummary(repoPath string, enabledScanners []string, aggregated report.AggregatedResult, reportPath string) {
+func printSummary(repoPath string, enabledScanners []string, aggregated report.AggregatedResult, reportPath string, sarifReportPath string) {
 	fmt.Printf("Scanned Path: %s\n", repoPath)
 	fmt.Printf("Enabled Scanners: %s\n", strings.Join(enabledScanners, ", "))
 	fmt.Printf("Total Findings: %d\n", len(aggregated.Findings))
@@ -125,6 +106,7 @@ func printSummary(repoPath string, enabledScanners []string, aggregated report.A
 	fmt.Printf("Info: %d\n", aggregated.Counts["info"])
 	fmt.Printf("Total Risk Score: %d\n", aggregated.TotalRiskScore)
 	fmt.Printf("JSON Report: %s\n", reportPath)
+	fmt.Printf("SARIF Report: %s\n", sarifReportPath)
 }
 
 func hasBlockingFindings(aggregated report.AggregatedResult) bool {

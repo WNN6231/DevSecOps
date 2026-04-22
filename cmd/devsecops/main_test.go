@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,12 +37,15 @@ func TestBuildJSONReportMapsAggregatedResult(t *testing.T) {
 		TotalRiskScore: 4,
 	}
 
-	jsonReport := buildJSONReport("C:/repo", []string{"sast"}, aggregated)
+	jsonReport := report.BuildJSONReport("C:/repo", []string{"sast"}, aggregated)
 	if jsonReport.ScannedPath != "C:/repo" {
 		t.Fatalf("expected scanned path C:/repo, got %s", jsonReport.ScannedPath)
 	}
 	if len(jsonReport.Findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(jsonReport.Findings))
+	}
+	if jsonReport.Summary.TotalFindings != 1 || jsonReport.Summary.High != 1 {
+		t.Fatalf("unexpected summary: %+v", jsonReport.Summary)
 	}
 	if jsonReport.TotalRiskScore != 4 {
 		t.Fatalf("expected risk score 4, got %d", jsonReport.TotalRiskScore)
@@ -80,5 +84,25 @@ func TestRunScanFailsOnHigh(t *testing.T) {
 
 	if exitCode != 1 {
 		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+
+	jsonReportPath := filepath.Join(cfg.ReportDir, jsonReportFilename)
+	if _, err := os.Stat(jsonReportPath); err != nil {
+		t.Fatalf("expected json report at %s: %v", jsonReportPath, err)
+	}
+
+	sarifReportPath := filepath.Join(cfg.ReportDir, sarifReportFilename)
+	content, err := os.ReadFile(sarifReportPath)
+	if err != nil {
+		t.Fatalf("expected sarif report at %s: %v", sarifReportPath, err)
+	}
+
+	var sarifReport report.SARIFReport
+	if err := json.Unmarshal(content, &sarifReport); err != nil {
+		t.Fatalf("unmarshal sarif report: %v", err)
+	}
+
+	if len(sarifReport.Runs) != 1 {
+		t.Fatalf("expected 1 sarif run, got %d", len(sarifReport.Runs))
 	}
 }
