@@ -1,0 +1,86 @@
+flowchart TD
+    Client[Client / CI]
+
+    subgraph API["API Service"]
+        Jobs["POST /api/v1/jobs"]
+        GetJob["GET /jobs/:id"]
+        GetResults["GET /jobs/:id/results"]
+        GetReport["GET /jobs/:id/report"]
+    end
+
+    subgraph DB["MySQL"]
+        ScanJobs[("scan_jobs")]
+        ScanResults[("scan_results")]
+        ScanReports[("scan_reports")]
+    end
+
+    subgraph Worker["Worker Service"]
+        Poll["Poll pending jobs"]
+        Claim["Claim job\npending -> running"]
+        Retry{"Retry / timeout loop\nmax_attempts = 3"}
+        Run["Run scan job"]
+        Aggregate["Aggregate findings\ncounts + risk score"]
+        BlockDecision{"block_on_high\nand HIGH/CRITICAL?"}
+        FinalSuccess["Set status = success"]
+        FinalBlocked["Set status = blocked"]
+        FinalFailed["Set status = failed"]
+    end
+
+    subgraph Scanners["Scanner Modules"]
+        SAST["sast"]
+        SCA["sca"]
+        Secret["secret"]
+        DAST["dast"]
+    end
+
+    subgraph Reports["Report System"]
+        Findings["Findings"]
+        Markdown["Markdown report"]
+        JSON["JSON report (CLI)"]
+        SARIF["SARIF-like report (CLI)"]
+    end
+
+    Redis[(Redis)]
+
+    Client --> Jobs
+    Jobs --> ScanJobs
+
+    ScanJobs --> Poll
+    Poll --> Claim
+    Claim --> Retry
+    Retry --> Run
+
+    Run --> SAST
+    Run --> SCA
+    Run --> Secret
+    Run --> DAST
+
+    SAST --> Findings
+    SCA --> Findings
+    Secret --> Findings
+    DAST --> Findings
+
+    Findings --> Aggregate
+    Aggregate --> Markdown
+    Aggregate --> JSON
+    Aggregate --> SARIF
+
+    Aggregate --> ScanResults
+    Markdown --> ScanReports
+    ScanReports --> ScanJobs
+
+    Aggregate --> BlockDecision
+    BlockDecision -->|No blocking findings| FinalSuccess
+    BlockDecision -->|HIGH / CRITICAL and block_on_high| FinalBlocked
+    Retry -->|timeout / panic / retries exhausted| FinalFailed
+
+    FinalSuccess --> ScanJobs
+    FinalBlocked --> ScanJobs
+    FinalFailed --> ScanJobs
+
+    GetJob --> ScanJobs
+    GetResults --> ScanResults
+    GetReport --> ScanReports
+
+    Redis -.-> Poll
+    Redis -.-> Claim
