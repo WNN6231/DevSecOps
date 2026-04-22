@@ -61,14 +61,10 @@ func (w *Worker) runCycle(ctx context.Context) {
 		return
 	}
 
-	processed, err := w.ProcessNext(ctx)
+	_, err := w.ProcessNext(ctx)
 	if err != nil {
 		w.logger.Error("worker cycle failed", slog.String("error", err.Error()))
 		return
-	}
-
-	if processed {
-		w.logger.Info("worker cycle completed")
 	}
 }
 

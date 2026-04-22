@@ -42,7 +42,7 @@ func (h *Handler) createJob(c *gin.Context) {
 		return
 	}
 
-	common.WriteOK(c, job.toResponse())
+	common.WriteSuccess(c, job.toResponse())
 }
 
 func (h *Handler) getJob(c *gin.Context) {
@@ -54,16 +54,11 @@ func (h *Handler) getJob(c *gin.Context) {
 
 	job, err := h.service.GetByID(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, ErrJobNotFound) {
-			common.WriteError(c, http.StatusNotFound, "job not found")
-			return
-		}
-
-		common.WriteError(c, http.StatusInternalServerError, "internal error")
+		h.writeDomainError(c, err)
 		return
 	}
 
-	common.WriteOK(c, job.toResponse())
+	common.WriteSuccess(c, job.toResponse())
 }
 
 func (h *Handler) getResults(c *gin.Context) {
@@ -81,18 +76,11 @@ func (h *Handler) getResults(c *gin.Context) {
 
 	results, err := h.service.GetResults(c.Request.Context(), id, req)
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrJobNotFound):
-			common.WriteError(c, http.StatusNotFound, "job not found")
-		case errors.Is(err, ErrInvalidPagination):
-			common.WriteError(c, http.StatusBadRequest, "invalid pagination")
-		default:
-			common.WriteError(c, http.StatusInternalServerError, "internal error")
-		}
+		h.writeDomainError(c, err)
 		return
 	}
 
-	common.WriteOK(c, results)
+	common.WriteSuccess(c, results)
 }
 
 func (h *Handler) getReport(c *gin.Context) {
@@ -104,16 +92,22 @@ func (h *Handler) getReport(c *gin.Context) {
 
 	report, err := h.service.GetReport(c.Request.Context(), id)
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrJobNotFound):
-			common.WriteError(c, http.StatusNotFound, "job not found")
-		case errors.Is(err, ErrReportNotFound):
-			common.WriteError(c, http.StatusNotFound, "report not found")
-		default:
-			common.WriteError(c, http.StatusInternalServerError, "internal error")
-		}
+		h.writeDomainError(c, err)
 		return
 	}
 
-	common.WriteOK(c, report)
+	common.WriteSuccess(c, report)
+}
+
+func (h *Handler) writeDomainError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrJobNotFound):
+		common.WriteError(c, http.StatusNotFound, "job not found")
+	case errors.Is(err, ErrReportNotFound):
+		common.WriteError(c, http.StatusNotFound, "report not found")
+	case errors.Is(err, ErrInvalidPagination):
+		common.WriteError(c, http.StatusBadRequest, "invalid pagination")
+	default:
+		common.WriteError(c, http.StatusInternalServerError, "internal error")
+	}
 }

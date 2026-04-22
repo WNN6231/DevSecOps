@@ -3,7 +3,6 @@ package report
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 
 	"devsecops-platform/pkg/common"
 )
@@ -64,23 +63,23 @@ func findingReportFromFinding(finding common.Finding) FindingReport {
 }
 
 func writeStructuredReport(reportDir, filename string, report interface{}) (string, error) {
-	if !filepath.IsAbs(reportDir) {
-		return "", ErrInvalidReportDir
+	path, err := reportPath(reportDir, filename)
+	if err != nil {
+		return "", err
 	}
 
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		return "", err
 	}
 
-	reportPath := filepath.Join(filepath.Clean(reportDir), filename)
 	content, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", err
 	}
 
-	if err := os.WriteFile(reportPath, append(content, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(path, append(content, '\n'), 0o644); err != nil {
 		return "", err
 	}
 
-	return reportPath, nil
+	return path, nil
 }

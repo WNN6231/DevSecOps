@@ -158,11 +158,6 @@ func (s *Service) getJob(ctx context.Context, id int64) (Job, error) {
 		return Job{}, err
 	}
 
-	s.logger.InfoContext(ctx, "job loaded",
-		slog.Int64("job_id", job.ID),
-		slog.String("status", job.Status),
-	)
-
 	return job, nil
 }
 

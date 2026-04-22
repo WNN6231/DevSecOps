@@ -4,18 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"devsecops-platform/pkg/common"
 )
 
 var severityOrder = []string{"critical", "high", "medium", "low", "info"}
-var ErrReportNotFound = errors.New("report not found")
-var ErrInvalidReportDir = errors.New("report dir must be absolute")
 
 func WriteMarkdownReport(reportDir string, jobID int64, result AggregatedResult) (string, error) {
-	reportPath, err := markdownReportPath(reportDir, jobID)
+	path, err := reportPath(reportDir, markdownFilename(jobID))
 	if err != nil {
 		return "", err
 	}
@@ -26,20 +23,20 @@ func WriteMarkdownReport(reportDir string, jobID int64, result AggregatedResult)
 
 	content := buildMarkdownReport(jobID, result)
 
-	if err := os.WriteFile(reportPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", err
 	}
 
-	return reportPath, nil
+	return path, nil
 }
 
 func ReadMarkdownReport(reportDir string, jobID int64) (string, error) {
-	reportPath, err := markdownReportPath(reportDir, jobID)
+	path, err := reportPath(reportDir, markdownFilename(jobID))
 	if err != nil {
 		return "", err
 	}
 
-	content, err := os.ReadFile(reportPath)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", ErrReportNotFound
@@ -49,14 +46,6 @@ func ReadMarkdownReport(reportDir string, jobID int64) (string, error) {
 	}
 
 	return string(content), nil
-}
-
-func markdownReportPath(reportDir string, jobID int64) (string, error) {
-	if !filepath.IsAbs(reportDir) {
-		return "", ErrInvalidReportDir
-	}
-
-	return filepath.Join(filepath.Clean(reportDir), fmt.Sprintf("%d.md", jobID)), nil
 }
 
 func buildMarkdownReport(jobID int64, result AggregatedResult) string {

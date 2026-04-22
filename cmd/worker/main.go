@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -12,19 +14,26 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := common.LoadConfig()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	logger, err := common.NewLogger(cfg.LogLevel)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	if err := store.InitDB(cfg.Database); err != nil {
 		logger.Error("database initialization failed", slog.String("error", err.Error()))
-		panic(err)
+		return err
 	}
 
 	jobService := job.NewService(store.GetDB(), logger, cfg.ReportDir)
@@ -39,4 +48,5 @@ func main() {
 
 	<-ctx.Done()
 	logger.Info("worker shutdown complete")
+	return nil
 }

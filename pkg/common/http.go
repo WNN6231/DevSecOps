@@ -14,7 +14,7 @@ type APIResponse struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-func WriteOK(c *gin.Context, data interface{}) {
+func WriteSuccess(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusOK, APIResponse{
 		Code:    0,
 		Message: "ok",
